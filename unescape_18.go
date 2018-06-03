@@ -1,6 +1,6 @@
 // +build go1.8
 
-package httptreemux
+package fasthttptreemux
 
 import "net/url"
 

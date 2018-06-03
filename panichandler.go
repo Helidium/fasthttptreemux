@@ -1,4 +1,4 @@
-package httptreemux
+package fasthttptreemux
 
 import (
 	"bufio"

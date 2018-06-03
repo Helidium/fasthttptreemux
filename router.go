@@ -2,17 +2,18 @@
 // implementation is rather different. Specifically, the routing rules are relaxed so that a
 // single path segment may be a wildcard in one route and a static token in another. This gives a
 // nice combination of high performance with a lot of convenience in designing the routing patterns.
-package httptreemux
+package fasthttptreemux
 
 import (
 	"fmt"
-	"net/http"
 	"net/url"
+
+	"github.com/valyala/fasthttp"
 )
 
 // The params argument contains the parameters parsed from wildcards and catch-alls in the URL.
-type HandlerFunc func(http.ResponseWriter, *http.Request, map[string]string)
-type PanicHandler func(http.ResponseWriter, *http.Request, interface{})
+type HandlerFunc func(*fasthttp.RequestCtx)
+type PanicHandler func(*fasthttp.RequestCtx, interface{})
 
 // RedirectBehavior sets the behavior when the router redirects the request to the
 // canonical version of the requested URL using RedirectTrailingSlash or RedirectClean.
@@ -63,9 +64,9 @@ func (t *TreeMux) Dump() string {
 	return t.root.dumpTree("", "")
 }
 
-func (t *TreeMux) serveHTTPPanic(w http.ResponseWriter, r *http.Request) {
+func (t *TreeMux) serveHTTPPanic(ctx *fasthttp.RequestCtx) {
 	if err := recover(); err != nil {
-		t.PanicHandler(w, r, err)
+		t.PanicHandler(ctx, err)
 	}
 }
 
@@ -77,9 +78,9 @@ func (t *TreeMux) redirectStatusCode(method string) (int, bool) {
 	}
 	switch behavior {
 	case Redirect301:
-		return http.StatusMovedPermanently, true
+		return fasthttp.StatusMovedPermanently, true
 	case Redirect307:
-		return http.StatusTemporaryRedirect, true
+		return fasthttp.StatusTemporaryRedirect, true
 	case Redirect308:
 		// Go doesn't have a constant for this yet. Yet another sign
 		// that you probably shouldn't use it.
@@ -87,32 +88,35 @@ func (t *TreeMux) redirectStatusCode(method string) (int, bool) {
 	case UseHandler:
 		return 0, false
 	default:
-		return http.StatusMovedPermanently, true
+		return fasthttp.StatusMovedPermanently, true
 	}
 }
 
 func redirectHandler(newPath string, statusCode int) HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request, params map[string]string) {
-		redirect(w, r, newPath, statusCode)
+	return func(ctx *fasthttp.RequestCtx) {
+		redirect(ctx, newPath, statusCode)
 	}
 }
 
-func redirect(w http.ResponseWriter, r *http.Request, newPath string, statusCode int) {
+func redirect(ctx *fasthttp.RequestCtx, newPath string, statusCode int) {
 	newURL := url.URL{
 		Path:     newPath,
-		RawQuery: r.URL.RawQuery,
-		Fragment: r.URL.Fragment,
+		RawQuery: string(ctx.URI().QueryString()),
+		Fragment: string(ctx.URI().Hash()),
 	}
-	http.Redirect(w, r, newURL.String(), statusCode)
+	ctx.Redirect(newURL.String(), statusCode)
 }
 
-func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupResult, found bool) {
-	result.StatusCode = http.StatusNotFound
-	path := r.RequestURI
-	unescapedPath := r.URL.Path
+func (t *TreeMux) lookup(ctx *fasthttp.RequestCtx) (result LookupResult, found bool) {
+	var uri = &fasthttp.URI{}
+	ctx.URI().CopyTo(uri)
+
+	result.StatusCode = fasthttp.StatusNotFound
+	path := string(uri.Path())
+	unescapedPath := string(uri.PathOriginal())
 	pathLen := len(path)
 	if pathLen > 0 && t.PathSource == RequestURI {
-		rawQueryLen := len(r.URL.RawQuery)
+		rawQueryLen := len(string(uri.QueryString()))
 
 		if rawQueryLen != 0 || path[pathLen-1] == '?' {
 			// Remove any query string and the ?.
@@ -122,7 +126,7 @@ func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupR
 	} else {
 		// In testing with http.NewRequest,
 		// RequestURI is not set so just grab URL.Path instead.
-		path = r.URL.Path
+		path = string(uri.Path())
 		pathLen = len(path)
 	}
 
@@ -132,18 +136,18 @@ func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupR
 		unescapedPath = unescapedPath[:len(unescapedPath)-1]
 	}
 
-	n, handler, params := t.root.search(r.Method, path[1:])
+	n, handler, params := t.root.search(string(ctx.Method()), path[1:])
 	if n == nil {
 		if t.RedirectCleanPath {
 			// Path was not found. Try cleaning it up and search again.
 			// TODO Test this
 			cleanPath := Clean(unescapedPath)
-			n, handler, params = t.root.search(r.Method, cleanPath[1:])
+			n, handler, params = t.root.search(string(ctx.Method()), cleanPath[1:])
 			if n == nil {
 				// Still nothing found.
 				return
 			}
-			if statusCode, ok := t.redirectStatusCode(r.Method); ok {
+			if statusCode, ok := t.redirectStatusCode(string(ctx.Method())); ok {
 				// Redirect to the actual path
 				return LookupResult{statusCode, redirectHandler(cleanPath, statusCode), nil, nil}, true
 			}
@@ -154,20 +158,20 @@ func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupR
 	}
 
 	if handler == nil {
-		if r.Method == "OPTIONS" && t.OptionsHandler != nil {
+		if string(ctx.Method()) == "OPTIONS" && t.OptionsHandler != nil {
 			handler = t.OptionsHandler
 		}
 
 		if handler == nil {
 			result.leafHandler = n.leafHandler
-			result.StatusCode = http.StatusMethodNotAllowed
+			result.StatusCode = fasthttp.StatusMethodNotAllowed
 			return
 		}
 	}
 
 	if !n.isCatchAll || t.RemoveCatchAllTrailingSlash {
 		if trailingSlash != n.addSlash && t.RedirectTrailingSlash {
-			if statusCode, ok := t.redirectStatusCode(r.Method); ok {
+			if statusCode, ok := t.redirectStatusCode(string(ctx.Method())); ok {
 				var h HandlerFunc
 				if n.addSlash {
 					// Need to add a slash.
@@ -200,7 +204,7 @@ func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupR
 		}
 	}
 
-	return LookupResult{http.StatusOK, handler, paramMap, nil}, true
+	return LookupResult{fasthttp.StatusOK, handler, paramMap, nil}, true
 }
 
 // Lookup performs a lookup without actually serving the request or mutating the request or response.
@@ -210,14 +214,14 @@ func (t *TreeMux) lookup(w http.ResponseWriter, r *http.Request) (result LookupR
 //
 // Regardless of the returned boolean's value, the LookupResult may be passed to ServeLookupResult
 // to be served appropriately.
-func (t *TreeMux) Lookup(w http.ResponseWriter, r *http.Request) (LookupResult, bool) {
+func (t *TreeMux) Lookup(ctx *fasthttp.RequestCtx) (LookupResult, bool) {
 	if t.SafeAddRoutesWhileRunning {
 		// In concurrency safe mode, we acquire a read lock on the mutex for any access.
 		// This is optional to avoid potential performance loss in high-usage scenarios.
 		t.mutex.RLock()
 	}
 
-	result, found := t.lookup(w, r)
+	result, found := t.lookup(ctx)
 
 	if t.SafeAddRoutesWhileRunning {
 		t.mutex.RUnlock()
@@ -227,30 +231,34 @@ func (t *TreeMux) Lookup(w http.ResponseWriter, r *http.Request) (LookupResult, 
 }
 
 // ServeLookupResult serves a request, given a lookup result from the Lookup function.
-func (t *TreeMux) ServeLookupResult(w http.ResponseWriter, r *http.Request, lr LookupResult) {
+func (t *TreeMux) ServeLookupResult(ctx *fasthttp.RequestCtx, lr LookupResult) {
 	if lr.handler == nil {
-		if lr.StatusCode == http.StatusMethodNotAllowed && lr.leafHandler != nil {
+		if lr.StatusCode == fasthttp.StatusMethodNotAllowed && lr.leafHandler != nil {
 			if t.SafeAddRoutesWhileRunning {
 				t.mutex.RLock()
 			}
 
-			t.MethodNotAllowedHandler(w, r, lr.leafHandler)
+			t.MethodNotAllowedHandler(ctx, lr.leafHandler)
 
 			if t.SafeAddRoutesWhileRunning {
 				t.mutex.RUnlock()
 			}
 		} else {
-			t.NotFoundHandler(w, r)
+			t.NotFoundHandler(ctx)
 		}
 	} else {
-		r = t.setDefaultRequestContext(r)
-		lr.handler(w, r, lr.params)
+		//r = t.setDefaultRequestContext(r)
+		for key, value := range lr.params {
+			ctx.SetUserValue(key, value)
+		}
+		lr.handler(ctx)
 	}
 }
 
-func (t *TreeMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// Handler ...
+func (t *TreeMux) Handler(ctx *fasthttp.RequestCtx) {
 	if t.PanicHandler != nil {
-		defer t.serveHTTPPanic(w, r)
+		defer t.serveHTTPPanic(ctx)
 	}
 
 	if t.SafeAddRoutesWhileRunning {
@@ -259,33 +267,36 @@ func (t *TreeMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.mutex.RLock()
 	}
 
-	result, _ := t.lookup(w, r)
+	result, _ := t.lookup(ctx)
 
 	if t.SafeAddRoutesWhileRunning {
 		t.mutex.RUnlock()
 	}
 
-	t.ServeLookupResult(w, r, result)
+	t.ServeLookupResult(ctx, result)
 }
 
 // MethodNotAllowedHandler is the default handler for TreeMux.MethodNotAllowedHandler,
 // which is called for patterns that match, but do not have a handler installed for the
 // requested method. It simply writes the status code http.StatusMethodNotAllowed and fills
 // in the `Allow` header value appropriately.
-func MethodNotAllowedHandler(w http.ResponseWriter, r *http.Request,
+func MethodNotAllowedHandler(ctx *fasthttp.RequestCtx,
 	methods map[string]HandlerFunc) {
 
 	for m := range methods {
-		w.Header().Add("Allow", m)
+		ctx.Response.Header.Add("Allow", m)
 	}
 
-	w.WriteHeader(http.StatusMethodNotAllowed)
+	ctx.Response.SetStatusCode(fasthttp.StatusMethodNotAllowed)
 }
 
 func New() *TreeMux {
 	tm := &TreeMux{
-		root:                    &node{path: "/"},
-		NotFoundHandler:         http.NotFound,
+		root: &node{path: "/"},
+		NotFoundHandler: func(ctx *fasthttp.RequestCtx) {
+			ctx.SetStatusCode(404)
+			ctx.SetBodyString("Not found")
+		},
 		MethodNotAllowedHandler: MethodNotAllowedHandler,
 		HeadCanUseGet:           true,
 		RedirectTrailingSlash:   true,

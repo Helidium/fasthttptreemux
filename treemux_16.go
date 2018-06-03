@@ -1,10 +1,12 @@
 // +build !go1.7
 
-package httptreemux
+package fasthttptreemux
 
 import (
 	"net/http"
 	"sync"
+
+	"github.com/valyala/fasthttp"
 )
 
 type TreeMux struct {
@@ -17,7 +19,7 @@ type TreeMux struct {
 	PanicHandler PanicHandler
 
 	// The default NotFoundHandler is http.NotFound.
-	NotFoundHandler func(w http.ResponseWriter, r *http.Request)
+	NotFoundHandler func(ctx *fasthttp.RequestCtx)
 
 	// Any OPTIONS request that matches a path without its own OPTIONS handler will use this handler,
 	// if set, instead of calling MethodNotAllowedHandler.
@@ -29,7 +31,7 @@ type TreeMux struct {
 	// the required Allowed header.
 	// The methods parameter contains the map of each method to the corresponding
 	// handler function.
-	MethodNotAllowedHandler func(w http.ResponseWriter, r *http.Request,
+	MethodNotAllowedHandler func(ctx *fasthttp.RequestCtx,
 		methods map[string]HandlerFunc)
 
 	// HeadCanUseGet allows the router to use the GET handler to respond to

@@ -108,15 +108,12 @@ func redirect(ctx *fasthttp.RequestCtx, newPath string, statusCode int) {
 }
 
 func (t *TreeMux) lookup(ctx *fasthttp.RequestCtx) (result LookupResult, found bool) {
-	var uri = &fasthttp.URI{}
-	ctx.URI().CopyTo(uri)
-
 	result.StatusCode = fasthttp.StatusNotFound
-	path := string(uri.Path())
-	unescapedPath := string(uri.PathOriginal())
+	path := string(ctx.URI().Path())
+	unescapedPath := string(ctx.URI().PathOriginal())
 	pathLen := len(path)
 	if pathLen > 0 && t.PathSource == RequestURI {
-		rawQueryLen := len(string(uri.QueryString()))
+		rawQueryLen := len(string(ctx.URI().QueryString()))
 
 		if rawQueryLen != 0 || path[pathLen-1] == '?' {
 			// Remove any query string and the ?.
@@ -126,7 +123,7 @@ func (t *TreeMux) lookup(ctx *fasthttp.RequestCtx) (result LookupResult, found b
 	} else {
 		// In testing with http.NewRequest,
 		// RequestURI is not set so just grab URL.Path instead.
-		path = string(uri.Path())
+		path = string(ctx.URI().Path())
 		pathLen = len(path)
 	}
 

@@ -1,10 +1,10 @@
 package fasthttptreemux
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/valyala/fasthttp"
 )
 
 // When we find a node with a matching path but no handler for a method,
@@ -18,10 +18,13 @@ func TestMethodNotAllowedFallthrough(t *testing.T) {
 	router := New()
 
 	addRoute := func(method, path string) {
-		router.Handle(method, path, func(w http.ResponseWriter, r *http.Request, params map[string]string) {
+		router.Handle(method, path, func(ctx *fasthttp.RequestCtx) {
 			matchedMethod = method
 			matchedPath = path
-			matchedParams = params
+			matchedParams = make(map[string]string)
+			ctx.VisitUserValues(func(key []byte, value interface{}) {
+				matchedParams[string(key)] = value.(string)
+			})
 		})
 	}
 
@@ -32,14 +35,16 @@ func TestMethodNotAllowedFallthrough(t *testing.T) {
 		matchedPath = ""
 		matchedParams = nil
 
-		w := httptest.NewRecorder()
-		r, _ := http.NewRequest(method, path, nil)
-		router.ServeHTTP(w, r)
-		if expectedCode != w.Code {
-			t.Errorf("%s %s expected code %d, saw %d", method, path, expectedCode, w.Code)
+		rh := fasthttp.RequestHeader{}
+		rh.SetMethod(method)
+		rh.SetRequestURI(path)
+		ctx := &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+		router.Handler(ctx)
+		if expectedCode != ctx.Response.StatusCode() {
+			t.Errorf("%s %s expected code %d, saw %d", method, path, expectedCode, ctx.Response.StatusCode())
 		}
 
-		if w.Code == 200 {
+		if ctx.Response.StatusCode() == 200 {
 			if matchedMethod != method || matchedPath != expectedPath {
 				t.Errorf("%s %s expected %s %s, saw %s %s", method, path,
 					expectedMethod, expectedPath, matchedMethod, matchedPath)
@@ -59,7 +64,7 @@ func TestMethodNotAllowedFallthrough(t *testing.T) {
 	addRoute("DELETE", "/apple/*path")
 	addRoute("OPTIONS", "/apple/*path")
 
-	checkRoute("GET", "/apple/banana/cat", "GET", "/apple/banana/cat", 200, nil)
+	checkRoute("GET", "/apple/banana/cat", "GET", "/apple/banana/cat", 200, map[string]string{})
 	checkRoute("POST", "/apple/banana/cat", "POST", "/apple/banana/:abc", 200,
 		map[string]string{"abc": "cat"})
 	checkRoute("POST", "/apple/banana/dog", "POST", "/apple/banana/:abc", 200,
@@ -71,10 +76,10 @@ func TestMethodNotAllowedFallthrough(t *testing.T) {
 	checkRoute("DELETE", "/apple/banana/cat", "DELETE", "/apple/*path", 200,
 		map[string]string{"path": "banana/cat"})
 
-	checkRoute("POST", "/apple/ban/def", "POST", "/apple/ban/def", 200, nil)
+	checkRoute("POST", "/apple/ban/def", "POST", "/apple/ban/def", 200, map[string]string{})
 	checkRoute("OPTIONS", "/apple/ban/def", "OPTIONS", "/apple/*path", 200,
 		map[string]string{"path": "ban/def"})
-	checkRoute("GET", "/apple/ban/def", "", "", 405, nil)
+	checkRoute("GET", "/apple/ban/def", "", "", 405, map[string]string{})
 
 	// Always fallback to the matching handler no matter how many other
 	// nodes without proper handlers are found on the way.
@@ -84,10 +89,10 @@ func TestMethodNotAllowedFallthrough(t *testing.T) {
 		map[string]string{"path": "bbbb"})
 
 	// Nothing matches on patch
-	checkRoute("PATCH", "/apple/banana/cat", "", "", 405, nil)
-	checkRoute("PATCH", "/apple/potato", "", "", 405, nil)
+	checkRoute("PATCH", "/apple/banana/cat", "", "", 405, map[string]string{})
+	checkRoute("PATCH", "/apple/potato", "", "", 405, map[string]string{})
 
 	// And some 404 tests for good measure
-	checkRoute("GET", "/abc", "", "", 404, nil)
-	checkRoute("OPTIONS", "/apple", "", "", 404, nil)
+	checkRoute("GET", "/abc", "", "", 404, map[string]string{})
+	checkRoute("OPTIONS", "/apple", "", "", 404, map[string]string{})
 }

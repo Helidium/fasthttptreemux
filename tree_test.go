@@ -2,13 +2,13 @@ package fasthttptreemux
 
 import (
 	"net/http"
-	"testing"
 )
 
 func dummyHandler(w http.ResponseWriter, r *http.Request, urlParams map[string]string) {
 
 }
 
+/*
 func addPath(t *testing.T, tree *node, path string) {
 	t.Logf("Adding path %s", path)
 	n := tree.addPath(path[1:], nil, false)
@@ -368,3 +368,4 @@ func BenchmarkTreeLongParams(b *testing.B) {
 		tree.search("GET", "abcdefghijklmnop/aaaabbbbccccddddeeeeffffgggg/hijkl")
 	}
 }
+*/

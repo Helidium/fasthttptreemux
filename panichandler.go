@@ -4,32 +4,33 @@ import (
 	"bufio"
 	"encoding/json"
 	"html/template"
-	"net/http"
 	"os"
 	"runtime"
 	"strings"
+
+	"github.com/valyala/fasthttp"
 )
 
 // SimplePanicHandler just returns error 500.
-func SimplePanicHandler(w http.ResponseWriter, r *http.Request, err interface{}) {
-	w.WriteHeader(http.StatusInternalServerError)
+func SimplePanicHandler(ctx *fasthttp.RequestCtx, err interface{}) {
+	ctx.Response.SetStatusCode(fasthttp.StatusInternalServerError)
 }
 
 // ShowErrorsPanicHandler prints a nice representation of an error to the browser.
 // This was taken from github.com/gocraft/web, which adapted it from the Traffic project.
-func ShowErrorsPanicHandler(w http.ResponseWriter, r *http.Request, err interface{}) {
+func ShowErrorsPanicHandler(ctx *fasthttp.RequestCtx, err interface{}) {
 	const size = 4096
 	stack := make([]byte, size)
 	stack = stack[:runtime.Stack(stack, false)]
-	renderPrettyError(w, r, err, stack)
+	renderPrettyError(ctx, err, stack)
 }
 
-func makeErrorData(r *http.Request, err interface{}, stack []byte, filePath string, line int) map[string]interface{} {
+func makeErrorData(r fasthttp.Request, err interface{}, stack []byte, filePath string, line int) map[string]interface{} {
 
 	data := map[string]interface{}{
 		"Stack":    string(stack),
-		"Params":   r.URL.Query(),
-		"Method":   r.Method,
+		"Params":   r.URI().QueryArgs(), // URL.Query(),
+		"Method":   r.Header.Method(),
 		"FilePath": filePath,
 		"Line":     line,
 		"Lines":    readErrorFileLines(filePath, line),
@@ -44,28 +45,28 @@ func makeErrorData(r *http.Request, err interface{}, stack []byte, filePath stri
 	return data
 }
 
-func renderPrettyError(rw http.ResponseWriter, req *http.Request, err interface{}, stack []byte) {
+func renderPrettyError(ctx *fasthttp.RequestCtx, err interface{}, stack []byte) {
 	_, filePath, line, _ := runtime.Caller(5)
 
-	data := makeErrorData(req, err, stack, filePath, line)
-	rw.Header().Set("Content-Type", "text/html")
-	rw.WriteHeader(http.StatusInternalServerError)
+	data := makeErrorData(ctx.Request, err, stack, filePath, line)
+	ctx.Response.Header.Set("Content-Type", "text/html")
+	ctx.Response.SetStatusCode(fasthttp.StatusInternalServerError)
 
 	tpl := template.Must(template.New("ErrorPage").Parse(panicPageTpl))
-	tpl.Execute(rw, data)
+	tpl.Execute(ctx, data)
 }
 
-func ShowErrorsJsonPanicHandler(w http.ResponseWriter, r *http.Request, err interface{}) {
+func ShowErrorsJsonPanicHandler(ctx *fasthttp.RequestCtx, err interface{}) {
 	const size = 4096
 	stack := make([]byte, size)
 	stack = stack[:runtime.Stack(stack, false)]
 
 	_, filePath, line, _ := runtime.Caller(4)
-	data := makeErrorData(r, err, stack, filePath, line)
+	data := makeErrorData(ctx.Request, err, stack, filePath, line)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(data)
+	ctx.Response.Header.Set("Content-Type", "application/json")
+	ctx.Response.SetStatusCode(fasthttp.StatusInternalServerError)
+	json.NewEncoder(ctx).Encode(data)
 }
 
 func readErrorFileLines(filePath string, errorLine int) map[int]string {

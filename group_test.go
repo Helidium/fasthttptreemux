@@ -2,8 +2,9 @@ package fasthttptreemux
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"github.com/valyala/fasthttp"
 )
 
 func TestEmptyGroupAndMapping(t *testing.T) {
@@ -14,42 +15,49 @@ func TestEmptyGroupAndMapping(t *testing.T) {
 			t.Error(`Expected NewGroup("")`)
 		}
 	}()
-	New().GET("", func(w http.ResponseWriter, _ *http.Request, _ map[string]string) {})
+	New().GET("", func(ctx *fasthttp.RequestCtx) {})
 }
 func TestSubGroupSlashMapping(t *testing.T) {
 	r := New()
-	r.NewGroup("/foo").GET("/", func(w http.ResponseWriter, _ *http.Request, _ map[string]string) {
-		w.WriteHeader(200)
+	r.NewGroup("/foo").GET("/", func(ctx *fasthttp.RequestCtx) {
+		//w.WriteHeader(200)
+		ctx.Response.SetStatusCode(200)
 	})
 
-	var req *http.Request
-	var recorder *httptest.ResponseRecorder
+	var rh fasthttp.RequestHeader
+	var ctx *fasthttp.RequestCtx
 
-	req, _ = http.NewRequest("GET", "/foo", nil)
-	recorder = httptest.NewRecorder()
-	r.ServeHTTP(recorder, req)
-	if recorder.Code != 301 { //should get redirected
-		t.Error(`/foo on NewGroup("/foo").GET("/") should result in 301 response, got:`, recorder.Code)
+	rh = fasthttp.RequestHeader{}
+	rh.SetMethod("GET")
+	rh.SetRequestURI("/foo")
+	ctx = &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+	r.Handler(ctx)
+	if ctx.Response.StatusCode() != 301 { //should get redirected
+		t.Error(`/foo on NewGroup("/foo").GET("/") should result in 301 response, got:`, ctx.Response.StatusCode())
 	}
 
-	req, _ = http.NewRequest("GET", "/foo/", nil)
-	recorder = httptest.NewRecorder()
-	r.ServeHTTP(recorder, req)
-	if recorder.Code != 200 {
-		t.Error(`/foo/ on NewGroup("/foo").GET("/"") should result in 200 response, got:`, recorder.Code)
+	rh = fasthttp.RequestHeader{}
+	rh.SetMethod("GET")
+	rh.SetRequestURI("/foo/")
+	ctx = &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+	r.Handler(ctx)
+	if ctx.Response.StatusCode() != 200 {
+		t.Error(`/foo/ on NewGroup("/foo").GET("/"") should result in 200 response, got:`, ctx.Response.StatusCode())
 	}
 }
 
 func TestSubGroupEmptyMapping(t *testing.T) {
 	r := New()
-	r.NewGroup("/foo").GET("", func(w http.ResponseWriter, _ *http.Request, _ map[string]string) {
-		w.WriteHeader(200)
+	r.NewGroup("/foo").GET("", func(ctx *fasthttp.RequestCtx) {
+		ctx.Response.SetStatusCode(200)
 	})
-	req, _ := http.NewRequest("GET", "/foo", nil)
-	recorder := httptest.NewRecorder()
-	r.ServeHTTP(recorder, req)
-	if recorder.Code != 200 {
-		t.Error(`/foo on NewGroup("/foo").GET("") should result in 200 response, got:`, recorder.Code)
+	rh := fasthttp.RequestHeader{}
+	rh.SetMethod("GET")
+	rh.SetRequestURI("/foo")
+	ctx := &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+	r.Handler(ctx)
+	if ctx.Response.StatusCode() != 200 {
+		t.Error(`/foo on NewGroup("/foo").GET("") should result in 200 response, got:`, ctx.Response.StatusCode())
 	}
 }
 
@@ -92,7 +100,7 @@ func TestInvalidPath(t *testing.T) {
 func testGroupMethods(t *testing.T, reqGen RequestCreator, headCanUseGet bool) {
 	var result string
 	makeHandler := func(method string) HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request, params map[string]string) {
+		return func(ctx *fasthttp.RequestCtx) {
 			result = method
 		}
 	}
@@ -108,11 +116,14 @@ func testGroupMethods(t *testing.T, reqGen RequestCreator, headCanUseGet bool) {
 
 	testMethod := func(method, expect string) {
 		result = ""
-		w := httptest.NewRecorder()
-		r, _ := reqGen(method, "/base/user/"+method, nil)
-		router.ServeHTTP(w, r)
-		if expect == "" && w.Code != http.StatusMethodNotAllowed {
-			t.Errorf("Method %s not expected to match but saw code %d", method, w.Code)
+		rh := fasthttp.RequestHeader{}
+		rh.SetMethod(method)
+		rh.SetRequestURI("/base/user/" + method)
+		ctx := &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+
+		router.Handler(ctx)
+		if expect == "" && ctx.Response.StatusCode() != http.StatusMethodNotAllowed {
+			t.Errorf("Method %s not expected to match but saw code %d", method, ctx.Response.StatusCode())
 		}
 
 		if result != expect {
@@ -141,7 +152,7 @@ func testGroupMethods(t *testing.T, reqGen RequestCreator, headCanUseGet bool) {
 func TestSetGetAfterHead(t *testing.T) {
 	var result string
 	makeHandler := func(method string) HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request, params map[string]string) {
+		return func(ctx *fasthttp.RequestCtx) {
 			result = method
 		}
 	}
@@ -153,9 +164,12 @@ func TestSetGetAfterHead(t *testing.T) {
 
 	testMethod := func(method, expect string) {
 		result = ""
-		w := httptest.NewRecorder()
-		r, _ := http.NewRequest(method, "/abc", nil)
-		router.ServeHTTP(w, r)
+		rh := fasthttp.RequestHeader{}
+		rh.SetMethod(method)
+		rh.SetRequestURI("/abc")
+		ctx := &fasthttp.RequestCtx{Request: fasthttp.Request{Header: rh}}
+
+		router.Handler(ctx)
 
 		if result != expect {
 			t.Errorf("Method %s got result %s", method, result)
